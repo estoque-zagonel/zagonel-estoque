@@ -2142,7 +2142,12 @@ function EstoqueApp() {
     onClick: () => setTab('relatorio')
   }, /*#__PURE__*/React.createElement(FileText, {
     size: 15
-  }), " Relatório"), isGerente && /*#__PURE__*/React.createElement("button", {
+  }), " Relatório"), /*#__PURE__*/React.createElement("button", {
+    className: `eb-tab ${tab === 'imagens' ? 'eb-tab-active' : ''}`,
+    onClick: () => setTab('imagens')
+  }, /*#__PURE__*/React.createElement(Camera, {
+    size: 15
+  }), " Imagens"), isGerente && /*#__PURE__*/React.createElement("button", {
     className: `eb-tab ${tab === 'config' ? 'eb-tab-active' : ''}`,
     onClick: () => setTab('config')
   }, /*#__PURE__*/React.createElement(Settings, {
@@ -2175,6 +2180,12 @@ function EstoqueApp() {
     produtos: produtos,
     totais: totais,
     role: role
+  }), tab === 'imagens' && /*#__PURE__*/React.createElement(ImagensTab, {
+    produtos: produtos,
+    isGerente: isGerente,
+    onEditarProduto: p => setModalProduto({
+      produto: p
+    })
   }), tab === 'config' && isGerente && /*#__PURE__*/React.createElement(ConfigTab, {
     produtos: produtos,
     senhas: senhas,
@@ -2483,6 +2494,121 @@ function RelatorioTab({
 }
 
 /* ---------- Config tab ---------- */
+
+/* ---------- Imagens dos produtos ---------- */
+
+function buscaImagemUrl(produto) {
+  const limpo = `${produto.nomeItem} ${produto.descricao || ''}`
+    .replace(/\bt\s?\d+\b/gi, ' ')
+    .replace(/\bv\d\b/gi, ' ')
+    .replace(/\bl[bcde]\b/gi, ' ')
+    .replace(/\b\d+\s?kg\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const termo = `${limpo} ${produto.categoria}`;
+  return `https://www.google.com/search?tbm=isch&q=${encodeURIComponent(termo)}`;
+}
+
+function ImagensTab({
+  produtos,
+  isGerente,
+  onEditarProduto
+}) {
+  const [lightboxProduto, setLightboxProduto] = useState(null);
+  const [busca, setBusca] = useState('');
+  const [filtroCategoria, setFiltroCategoria] = useState('Todos');
+  const [somenteSemFoto, setSomenteSemFoto] = useState(false);
+  const comFoto = produtos.filter(p => p.imagemUrl).length;
+  const lista = produtos
+    .filter(p => filtroCategoria === 'Todos' || p.categoria === filtroCategoria)
+    .filter(p => !somenteSemFoto || !p.imagemUrl)
+    .filter(p => {
+      const termo = busca.trim().toLowerCase();
+      if (!termo) return true;
+      return p.nomeItem.toLowerCase().includes(termo) || (p.descricao || '').toLowerCase().includes(termo);
+    })
+    .sort((a, b) => a.nomeItem.localeCompare(b.nomeItem, 'pt-BR'));
+  return /*#__PURE__*/React.createElement(React.Fragment, null, lightboxProduto && /*#__PURE__*/React.createElement(ImagemLightbox, {
+    produto: lightboxProduto,
+    onClose: () => setLightboxProduto(null)
+  }), /*#__PURE__*/React.createElement("div", {
+    className: "eb-img-resumo"
+  }, comFoto, " de ", produtos.length, " produtos com foto cadastrada.", isGerente ? ' Toque em um produto para enviar a foto.' : ''), /*#__PURE__*/React.createElement("div", {
+    className: "eb-toolbar"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eb-input-icon-wrap",
+    style: {
+      flex: 1,
+      minWidth: 220
+    }
+  }, /*#__PURE__*/React.createElement(Search, {
+    size: 15,
+    className: "eb-input-icon"
+  }), /*#__PURE__*/React.createElement("input", {
+    className: "eb-input eb-input-icon-padding",
+    placeholder: "Buscar por nome do item ou descrição…",
+    value: busca,
+    onChange: e => setBusca(e.target.value)
+  })), /*#__PURE__*/React.createElement("div", {
+    className: "eb-chip-group"
+  }, ['Todos', ...CATEGORIAS].map(c => /*#__PURE__*/React.createElement("button", {
+    key: c,
+    className: `eb-chip ${filtroCategoria === c ? 'eb-chip-active' : ''}`,
+    onClick: () => setFiltroCategoria(c)
+  }, c))), /*#__PURE__*/React.createElement("button", {
+    className: `eb-chip ${somenteSemFoto ? 'eb-chip-active' : ''}`,
+    onClick: () => setSomenteSemFoto(v => !v)
+  }, /*#__PURE__*/React.createElement(Camera, {
+    size: 13
+  }), " Sem foto")), /*#__PURE__*/React.createElement("div", {
+    className: "eb-img-grid"
+  }, lista.map(p => /*#__PURE__*/React.createElement("div", {
+    key: p.id,
+    className: "eb-img-card"
+  }, p.imagemUrl ? /*#__PURE__*/React.createElement("img", {
+    className: "eb-img-thumb",
+    src: p.imagemUrl,
+    alt: p.nomeItem,
+    onClick: () => setLightboxProduto(p)
+  }) : /*#__PURE__*/React.createElement("div", {
+    className: "eb-img-vazio",
+    style: {
+      color: (CATEGORIA_STYLE[p.categoria] || {}).accent || '#2B6C86'
+    }
+  }, /*#__PURE__*/React.createElement(Camera, {
+    size: 22
+  }), /*#__PURE__*/React.createElement("span", null, "Sem foto")), /*#__PURE__*/React.createElement("div", {
+    className: "eb-img-info"
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "eb-img-nome"
+  }, p.nomeItem), /*#__PURE__*/React.createElement("div", {
+    className: "eb-img-desc"
+  }, p.descricao || '—'), /*#__PURE__*/React.createElement("div", {
+    className: "eb-img-meta"
+  }, /*#__PURE__*/React.createElement(CategoriaBadge, {
+    categoria: p.categoria
+  }), /*#__PURE__*/React.createElement("span", {
+    className: "eb-img-qtd"
+  }, fmtQtd(p.quantidade), " ", UNIDADE))), /*#__PURE__*/React.createElement("div", {
+    className: "eb-img-acoes"
+  }, /*#__PURE__*/React.createElement("a", {
+    className: "eb-btn-ghost eb-btn-sm",
+    href: buscaImagemUrl(p),
+    target: "_blank",
+    rel: "noopener noreferrer"
+  }, /*#__PURE__*/React.createElement(Search, {
+    size: 13
+  }), " Buscar imagem"), isGerente && /*#__PURE__*/React.createElement("button", {
+    className: "eb-btn-primary eb-btn-sm",
+    onClick: () => onEditarProduto(p)
+  }, /*#__PURE__*/React.createElement(Camera, {
+    size: 13
+  }), p.imagemUrl ? ' Trocar foto' : ' Enviar foto')))), lista.length === 0 && /*#__PURE__*/React.createElement("div", {
+    className: "eb-empty"
+  }, "Nenhum produto encontrado com esse filtro.")));
+}
+
+/* ---------- Configurações tab ---------- */
 
 function ConfigTab({
   produtos,
@@ -2928,6 +3054,41 @@ function GlobalStyle() {
       }
       .eb-print-table td { padding: 4px 6px; border-bottom: 1px solid #EFEDE7; }
       .eb-print-table tr { page-break-inside: avoid; break-inside: avoid; }
+
+      /* Aba Imagens */
+      .eb-img-resumo {
+        font-size: 12.5px; color: #6C7075; margin: 0 0 10px;
+      }
+      .eb-img-grid {
+        display: grid; gap: 10px;
+        grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+      }
+      .eb-img-card {
+        background: #fff; border: 1px solid #E4E1D9; border-radius: 10px;
+        overflow: hidden; display: flex; flex-direction: column;
+      }
+      .eb-img-thumb {
+        width: 100%; aspect-ratio: 4/3; object-fit: cover; display: block; cursor: zoom-in;
+        background: #F4F2ED;
+      }
+      .eb-img-vazio {
+        width: 100%; aspect-ratio: 4/3; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; gap: 5px;
+        background: #F4F2ED; border-bottom: 1px solid #E4E1D9;
+        font-size: 11px; text-transform: uppercase; letter-spacing: .6px; opacity: .75;
+      }
+      .eb-img-info { padding: 9px 11px 6px; flex: 1; }
+      .eb-img-nome { font-weight: 600; font-size: 13.5px; line-height: 1.25; }
+      .eb-img-desc { font-size: 12px; color: #6C7075; margin-top: 2px; }
+      .eb-img-meta {
+        display: flex; align-items: center; justify-content: space-between;
+        gap: 8px; margin-top: 7px;
+      }
+      .eb-img-qtd { font-size: 12px; font-weight: 600; white-space: nowrap; }
+      .eb-img-acoes {
+        display: flex; gap: 6px; padding: 0 11px 11px; flex-wrap: wrap;
+      }
+      .eb-img-acoes > * { flex: 1; justify-content: center; text-decoration: none; }
 
       @media print {
         @page { margin: 14mm; }
