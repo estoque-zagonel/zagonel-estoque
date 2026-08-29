@@ -816,21 +816,15 @@ const PRODUTOS_INICIAIS = [{
 /* ---------- Storage helpers (Supabase, tabela estoque_kv: key/value) ---------- */
 
 async function safeGet(key, _shared) {
-  if (!supabaseClient) return null;
-  try {
-    const {
-      data,
-      error
-    } = await supabaseClient.from('estoque_kv').select('value').eq('key', key).maybeSingle();
-    if (error) {
-      console.error('Falha ao ler', key, error);
-      return null;
-    }
-    return data ? data.value : null;
-  } catch (e) {
-    console.error('Falha ao ler', key, e);
-    return null;
-  }
+  if (!supabaseClient) throw new Error('Banco de dados nao configurado.');
+  const {
+    data,
+    error
+  } = await supabaseClient.from('estoque_kv').select('value').eq('key', key).maybeSingle();
+  if (error) throw error;
+  // null aqui significa: a chave realmente nao existe no banco.
+  // Falha de rede NUNCA chega aqui como null - vira excecao acima.
+  return data ? data.value : null;
 }
 async function safeSet(key, value, _shared) {
   if (!supabaseClient) return false;
@@ -854,6 +848,40 @@ async function safeSet(key, value, _shared) {
 }
 function getPublicIp() {
   return Promise.race([fetch('https://api.ipify.org?format=json').then(r => r.json()).then(d => d.ip || null).catch(() => null), new Promise(resolve => setTimeout(() => resolve(null), 3500))]);
+}
+
+/* ---------- Sessao: mantem o login ao atualizar a pagina ---------- */
+/* Fica salvo so no aparelho, por SESSAO_HORAS. Sair pelo botao limpa. */
+
+const SESSAO_CHAVE = 'zagonel-sessao';
+const SESSAO_HORAS = 12;
+function lerSessao() {
+  try {
+    const bruto = window.localStorage.getItem(SESSAO_CHAVE);
+    if (!bruto) return null;
+    const s = JSON.parse(bruto);
+    if (!s || (s.role !== 'gerente' && s.role !== 'visitante') || !s.expira) return null;
+    if (Date.now() > s.expira) {
+      window.localStorage.removeItem(SESSAO_CHAVE);
+      return null;
+    }
+    return s.role;
+  } catch (e) {
+    return null; // navegador anonimo ou armazenamento bloqueado
+  }
+}
+function gravarSessao(role) {
+  try {
+    window.localStorage.setItem(SESSAO_CHAVE, JSON.stringify({
+      role,
+      expira: Date.now() + SESSAO_HORAS * 3600 * 1000
+    }));
+  } catch (e) {/* sem armazenamento: cai no comportamento antigo */}
+}
+function limparSessao() {
+  try {
+    window.localStorage.removeItem(SESSAO_CHAVE);
+  } catch (e) {}
 }
 
 /* ---------- Ícones (substituem lucide-react, sem dependência externa) ---------- */
@@ -1329,7 +1357,8 @@ function LogoMark({
 
 function LoginScreen({
   onLogin,
-  loading
+  loading,
+  erroCarregamento
 }) {
   const [senha, setSenha] = useState('');
   const [erro, setErro] = useState('');
@@ -1365,7 +1394,19 @@ function LoginScreen({
   }, /*#__PURE__*/React.createElement(Loader2, {
     size: 18,
     className: "eb-spin"
-  }), " Carregando dados do depósito…") : /*#__PURE__*/React.createElement("div", {
+  }), " Carregando dados do depósito…") : erroCarregamento ? /*#__PURE__*/React.createElement("div", {
+    className: "eb-login-erro"
+  }, /*#__PURE__*/React.createElement(AlertTriangle, {
+    size: 18
+  }), /*#__PURE__*/React.createElement("span", null, erroCarregamento), /*#__PURE__*/React.createElement("button", {
+    type: "button",
+    className: "eb-btn-primary",
+    style: {
+      width: '100%',
+      marginTop: 4
+    },
+    onClick: () => window.location.reload()
+  }, "Tentar de novo")) : /*#__PURE__*/React.createElement("div", {
     className: "eb-login-form"
   }, /*#__PURE__*/React.createElement("label", {
     className: "eb-field-label",
@@ -1396,7 +1437,7 @@ function LoginScreen({
     onClick: tentarEntrar
   }, "Entrar"), /*#__PURE__*/React.createElement("p", {
     className: "eb-login-hint"
-  }, "Gerente: acesso completo · Visitante: apenas consulta"))));
+  }, "Gerente: acesso completo · Visitante: apenas consulta", /*#__PURE__*/React.createElement("br", null), "O acesso fica salvo neste aparelho por 12 horas."))));
 }
 
 /* ---------- Movement modal ---------- */
@@ -1893,13 +1934,31 @@ function EstoqueApp() {
   const [toast, setToast] = useState(null);
   const [modalMov, setModalMov] = useState(null); // { produto?, tipo? } | null, true = open with search
   const [modalProduto, setModalProduto] = useState(null); // { produto } edit | {} new | null
+  const [dadosCarregados, setDadosCarregados] = useState(false);
+  const [erroCarregamento, setErroCarregamento] = useState('');
   const toastTimer = useRef(null);
   useEffect(() => {
     let cancelled = false;
-    const comLimite = p => Promise.race([p, new Promise(resolve => setTimeout(() => resolve(null), 4000))]);
+    const lerTudo = () => Promise.all([safeGet(STORAGE_KEYS.produtos, true), safeGet(STORAGE_KEYS.movimentacoes, true), safeGet(STORAGE_KEYS.senhas, true), safeGet(STORAGE_KEYS.acessos, true)]);
     async function init() {
-      const [prodRaw, movRaw, senhasRaw, acessosRaw] = await Promise.all([comLimite(safeGet(STORAGE_KEYS.produtos, true)), comLimite(safeGet(STORAGE_KEYS.movimentacoes, true)), comLimite(safeGet(STORAGE_KEYS.senhas, true)), comLimite(safeGet(STORAGE_KEYS.acessos, true))]);
+      let dados = null;
+      for (let tentativa = 1; tentativa <= 3 && !cancelled; tentativa++) {
+        try {
+          dados = await lerTudo();
+          break;
+        } catch (e) {
+          console.error('Falha ao carregar dados (tentativa ' + tentativa + ' de 3)', e);
+          if (tentativa < 3) await new Promise(r => setTimeout(r, 1500 * tentativa));
+        }
+      }
       if (cancelled) return;
+      if (!dados) {
+        // Conexao falhou. NAO gravamos nada: os dados do banco ficam intactos.
+        setErroCarregamento('Nao foi possivel carregar os dados do deposito. Verifique a internet e recarregue a pagina. Nada foi alterado no banco.');
+        setLoading(false);
+        return;
+      }
+      const [prodRaw, movRaw, senhasRaw, acessosRaw] = dados;
       if (prodRaw) {
         try {
           setProdutos(JSON.parse(prodRaw));
@@ -1924,6 +1983,15 @@ function EstoqueApp() {
           setAcessos(JSON.parse(acessosRaw));
         } catch (e) {/* keep default */}
       }
+      setDadosCarregados(true);
+      const sessaoSalva = lerSessao();
+      if (sessaoSalva) {
+        setRole(sessaoSalva);
+        gravarSessao(sessaoSalva); // renova o prazo a cada uso
+        getPublicIp().then(ip => {
+          if (!cancelled) setSessionIp(ip);
+        });
+      }
       setLoading(false);
     }
     init();
@@ -1940,8 +2008,8 @@ function EstoqueApp() {
       schema: 'public',
       table: 'estoque_kv'
     }, payload => {
-      const row = payload.new || payload.old;
-      if (!row || !row.key) return;
+      const row = payload.new;
+      if (!row || !row.key || typeof row.value !== 'string') return;
       try {
         if (row.key === STORAGE_KEYS.produtos) setProdutos(JSON.parse(row.value));else if (row.key === STORAGE_KEYS.movimentacoes) setMovimentacoes(JSON.parse(row.value));else if (row.key === STORAGE_KEYS.senhas) setSenhas(JSON.parse(row.value));else if (row.key === STORAGE_KEYS.acessos) setAcessos(JSON.parse(row.value));
       } catch (e) {/* ignore malformed payload */}
@@ -1959,6 +2027,7 @@ function EstoqueApp() {
     toastTimer.current = setTimeout(() => setToast(null), 3200);
   };
   const registrarAcesso = async roleAtual => {
+    if (!dadosCarregados) return;
     const ip = await getPublicIp();
     setSessionIp(ip);
     const registro = {
@@ -1978,20 +2047,31 @@ function EstoqueApp() {
     if (senha === senhas.gerente) novoRole = 'gerente';else if (senha === senhas.visitante) novoRole = 'visitante';
     if (!novoRole) return false;
     setRole(novoRole);
+    gravarSessao(novoRole);
     registrarAcesso(novoRole);
     return true;
   };
   const handleLogout = () => {
+    limparSessao();
     setRole(null);
     setTab('estoque');
   };
   const persistProdutos = async novos => {
+    if (!dadosCarregados) {
+      showToast('Dados ainda nao carregados. Alteracao NAO foi salva.', 'error');
+      return false;
+    }
     setProdutos(novos);
-    await safeSet(STORAGE_KEYS.produtos, JSON.stringify(novos), true);
+    const ok = await safeSet(STORAGE_KEYS.produtos, JSON.stringify(novos), true);
+    if (!ok) showToast('ERRO: nao foi possivel salvar no banco. Recarregue a pagina e refaca.', 'error');
+    return ok;
   };
   const persistMovimentacoes = async novas => {
+    if (!dadosCarregados) return false;
     setMovimentacoes(novas);
-    await safeSet(STORAGE_KEYS.movimentacoes, JSON.stringify(novas), true);
+    const ok = await safeSet(STORAGE_KEYS.movimentacoes, JSON.stringify(novas), true);
+    if (!ok) showToast('ERRO: a movimentacao nao foi salva no banco.', 'error');
+    return ok;
   };
   const handleConfirmMovimentacao = async ({
     produto,
@@ -2036,8 +2116,16 @@ function EstoqueApp() {
     showToast('Produto removido do catálogo.');
   };
   const handleAlterarSenhas = async novas => {
+    if (!dadosCarregados) {
+      showToast('Dados ainda nao carregados. Senha NAO foi salva.', 'error');
+      return;
+    }
+    const ok = await safeSet(STORAGE_KEYS.senhas, JSON.stringify(novas), true);
+    if (!ok) {
+      showToast('ERRO: a senha nao foi salva no banco. Tente de novo.', 'error');
+      return;
+    }
     setSenhas(novas);
-    await safeSet(STORAGE_KEYS.senhas, JSON.stringify(novas), true);
     showToast('Senhas atualizadas com sucesso.');
   };
   const isGerente = role === 'gerente';
@@ -2098,7 +2186,8 @@ function EstoqueApp() {
   if (!role) {
     return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement(GlobalStyle, null), /*#__PURE__*/React.createElement(LoginScreen, {
       onLogin: handleLogin,
-      loading: loading
+      loading: loading,
+      erroCarregamento: erroCarregamento
     }));
   }
   return /*#__PURE__*/React.createElement("div", {
@@ -3007,6 +3096,11 @@ function GlobalStyle() {
       .eb-login-sub { font-size: 12.5px; color: #8A8E94; margin-top: 4px; margin-bottom: 22px; }
       .eb-login-form { text-align: left; }
       .eb-login-hint { font-size: 11.5px; color: #9A9EA4; text-align: center; margin-top: 14px; }
+      .eb-login-erro {
+        display: flex; flex-direction: column; align-items: center; gap: 10px;
+        background: #F7EAE6; border: 1px solid #E3B5A8; border-radius: 8px;
+        padding: 16px; color: #8E3320; font-size: 13px; line-height: 1.5; text-align: center;
+      }
       .eb-login-loading { display: flex; align-items: center; justify-content: center; gap: 8px; color: #6B6F76; font-size: 13px; padding: 20px 0; }
 
       /* Toast */
